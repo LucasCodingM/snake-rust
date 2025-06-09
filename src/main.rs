@@ -6,14 +6,14 @@ use crossterm::{
 };
 use std::thread;
 
-pub struct Scene {
+pub struct Scene<'a> {
     pub width: u16,
     pub height: u16,
-    pub buffer: Stdout,
+    pub buffer: &'a mut Stdout,
 }
 
-impl Scene {
-    pub fn new(buffer: Stdout, width: u16, height: u16) -> Self {
+impl<'a> Scene<'a> {
+    pub fn new(buffer: &'a mut Stdout, width: u16, height: u16) -> Self {
         Scene{
             width,
             height,
@@ -33,12 +33,6 @@ impl Scene {
         Ok(())
     }
 
-    pub fn clear_scene(&mut self) -> io::Result<()> {
-        self.buffer.execute(terminal::Clear(terminal::ClearType::All))?;
-        self.buffer.execute(cursor::MoveTo(0,0))?;
-        Ok(())
-    }
-
     pub fn draw_border(&mut self) -> io::Result<()> {
         self.buffer.execute(terminal::Clear(terminal::ClearType::All))?;
 
@@ -46,9 +40,19 @@ impl Scene {
             for x in 0..self.width {
                 if (y == 0 || y == self.height - 1) || (x == 0 || x == self.width - 1) {
                     // in this loop we are more efficient by not flushing the buffer.
-                    self.buffer
-                    .queue(cursor::MoveTo(x,y))?
-                    .queue(style::PrintStyledContent( "█".red()))?;
+/*                     if y % 2 != 0 {
+                       self.buffer
+                        .queue(cursor::MoveTo(x,y))?
+                        .queue(style::PrintStyledContent( "▀".red()))?; 
+                    }
+                    else {
+                        self.buffer
+                        .queue(cursor::MoveTo(x,y))?                        
+                        .queue(style::PrintStyledContent( "▄".red()))?;
+                    } */
+                   self.buffer
+                        .queue(cursor::MoveTo(x,y))?                        
+                        .queue(style::PrintStyledContent( "▄".red()))?;
                 }
             }   
         }
@@ -57,14 +61,47 @@ impl Scene {
     }
 
     pub fn draw_snake(&mut self, snake: &Snake) -> io::Result<()> {
-        for segment in snake.body.iter() {
+        if let Some(head) = snake.body.first() {
+           let (x_head,y_head) = *head;
+           self.buffer
+                    .queue(cursor::MoveTo(x_head,y_head))?
+                    .queue(style::PrintStyledContent( "▀".blue()))?;
+        }
+        
+        for segment in snake.body.iter().skip(1) {
             let (x,y) = *segment;
             self.buffer
                     .queue(cursor::MoveTo(x,y))?
-                    .queue(style::PrintStyledContent( "█".green()))?;
+                    .queue(style::PrintStyledContent( "▀".green()))?;
         }
         self.buffer.flush()?;
         Ok(())
+    }
+
+    pub fn is_snake_out_of_bound(&self, snake: &Snake) -> bool {
+        let(x, y) = snake.body.first().unwrap();
+        if (*x<=1) || (*x >= self.width - 1) || (*y<=1) || (*y >= self.height - 1) {
+            return true;
+        }
+        false
+    }
+
+    fn find_duplicate_tuples(v: &Vec<(u16, u16)>) -> Option<(u16, u16)> {
+        let mut seen = Vec::new();
+        for tuple in v.iter() {
+            if seen.contains(tuple) {
+                return Some(*tuple);
+            }
+            seen.push(*tuple);
+        }
+        None
+    }
+
+    pub fn is_snake_touch_himself(&self, snake: &Snake) -> bool {
+        match Scene::<'a>::find_duplicate_tuples(&snake.body) {
+            Some(_) => true,
+            None => false,
+        }
     }
 }
 
@@ -159,33 +196,53 @@ impl Snake {
     }
 }
 
-fn init_game() -> io::Result<(Snake,Scene)>{
+fn init_game(stdout: &mut Stdout) -> io::Result<(Snake,Scene)>{
     terminal::enable_raw_mode()?; // <- enable raw mode
+    // Passer en mode alternatif pour éviter les problèmes de redimensionnement
+    crossterm::execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
+    clear(stdout)?;
+
     let (term_width, term_height) = terminal::size()?;
     let width = std::cmp::min(150, term_width);
     let height = std::cmp::min(40, term_height);
 
     let snake = Snake::new(width / 2, height / 2, Direction::Down);
-    let scene= Scene::new(io::stdout(), width, height);
+    let scene= Scene::new(stdout, width, height);
     Ok((snake, scene))
 
 }
 
-fn exit_game(scene: &mut Scene) -> io::Result<()> {
-    scene.clear_scene()?;
+fn clear(stdout: &mut Stdout) -> io::Result<()>{
+    crossterm::execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+    crossterm::execute!(stdout, cursor::MoveTo(0,0))?;
+    Ok(())
+
+}
+
+fn exit_game(stdout: &mut Stdout) -> io::Result<()> {
     terminal::disable_raw_mode()?; // <- cleanup
+    // Revenir à l'écran normal et montrer le curseur
+    crossterm::execute!(stdout, cursor::Show, terminal::LeaveAlternateScreen)?;
+    clear(stdout)?;
     Ok(())
 }
 
 fn main() -> io::Result<()> {
 
-    let (mut snake, mut scene) = init_game()?;
+    let mut stdout = io::stdout();
+
+    let (mut snake, mut scene) = init_game(&mut stdout)?;
 
     scene.draw_border()?;
     scene.draw_snake(&snake)?;
+
+    let mut end_of_game = false;
     
     let mut count_loop = 0;
     let mut add_segment = false;
+    const LOOP_COUNT_INCREASE_SNAKE_SIZE: u32 = 5;
+    const DURATION_LOOP_MS: u64 = 300;
+
     loop {
         let mut latest_direction = None;
 
@@ -207,10 +264,25 @@ fn main() -> io::Result<()> {
                     KeyCode::Right if current_direction != Direction::Left => {
                         latest_direction = Some(Direction::Right);
                     }
-                    KeyCode::Esc => return exit_game(&mut scene), // quit the game
+                    KeyCode::Enter if end_of_game == true => {
+                        //restart
+                        (snake, scene) = init_game(&mut stdout)?;
+                        scene.draw_border()?;
+                        scene.draw_snake(&snake)?;
+                        end_of_game = false;
+
+                    }
+                    KeyCode::Esc => return exit_game(&mut io::stdout()), // quit the game
                     _ => {}
                 }
             }
+        }
+
+        if scene.is_snake_out_of_bound(&snake) || scene.is_snake_touch_himself(&snake) {
+            crossterm::queue!(&mut io::stdout(), cursor::MoveTo(scene.width/3 as u16, scene.height/2 as u16), Print("LOST Again/Exit: ENTER/ECHAP"))?;
+            io::stdout().flush()?;
+            end_of_game = true;
+            continue;
         }
 
         // Apply only the latest direction change if any
@@ -223,9 +295,11 @@ fn main() -> io::Result<()> {
         snake.move_snake(add_segment);
         scene.draw_snake(&snake)?;
 
-        thread::sleep(time::Duration::from_millis(500));
 
-        if count_loop % 10 == 0 {
+
+        thread::sleep(time::Duration::from_millis(DURATION_LOOP_MS));
+
+        if count_loop % LOOP_COUNT_INCREASE_SNAKE_SIZE == 0 {
             add_segment = true
         }
         else {
