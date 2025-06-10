@@ -16,7 +16,7 @@ use scene::Scene;
 
 fn init_game(stdout: &mut Stdout) -> io::Result<(Snake,Scene)>{
     terminal::enable_raw_mode()?; // <- enable raw mode
-    // Passer en mode alternatif pour éviter les problèmes de redimensionnement
+    // Enter alternate mode to avoid resize
     crossterm::execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
     clear(stdout)?;
 
@@ -46,6 +46,26 @@ fn exit_game(stdout: &mut Stdout) -> io::Result<()> {
     Ok(())
 }
 
+fn pause_game(stdout: &mut Stdout, scene: &Scene)  -> io::Result<()> {
+    crossterm::queue!(stdout, cursor::MoveTo(scene.width()/2 as u16, scene.height()/2 as u16), Print("Press SPACE to continue"))?;
+    stdout.flush()?;
+    loop {
+        if let Event::Key(KeyEvent { code, .. }) = event::read()? {
+            match code {
+                KeyCode::Char(' ') => {
+                    crossterm::queue!(stdout, 
+                    cursor::MoveTo(scene.width()/2 as u16, scene.height()/2 as u16), 
+                    Print("                       "))?;
+                    stdout.flush()?;
+                    break
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
 
     let mut stdout = io::stdout();
@@ -55,11 +75,11 @@ fn main() -> io::Result<()> {
     scene.draw_border()?;
     scene.draw_snake(&snake)?;
 
-    let mut end_of_game = false;
-    
-    let mut count_loop = 0;
+    scene.add_fruit(&snake);
+    scene.draw_fruit()?;
+
+    let mut end_of_game = false; 
     let mut add_segment = false;
-    const LOOP_COUNT_INCREASE_SNAKE_SIZE: u32 = 5;
     const DURATION_LOOP_MS: u64 = 100;
 
     loop {
@@ -88,8 +108,13 @@ fn main() -> io::Result<()> {
                         (snake, scene) = init_game(&mut stdout)?;
                         scene.draw_border()?;
                         scene.draw_snake(&snake)?;
+                        scene.add_fruit(&snake);
+                        scene.draw_fruit()?;
                         end_of_game = false;
 
+                    }
+                    KeyCode::Char(' ') => {
+                        pause_game(&mut io::stdout(),&scene)?;
                     }
                     KeyCode::Esc => return exit_game(&mut io::stdout()), // quit the game
                     _ => {}
@@ -102,7 +127,7 @@ fn main() -> io::Result<()> {
             io::stdout().flush()?;
             end_of_game = true;
             continue;
-        }
+        }        
 
         // Apply only the latest direction change if any
         if let Some(new_dir) = latest_direction {
@@ -112,15 +137,17 @@ fn main() -> io::Result<()> {
         scene.clear_snake(&snake)?;        
         snake.move_snake(add_segment);
         scene.draw_snake(&snake)?;
+        scene.draw_fruit()?;
 
-        thread::sleep(time::Duration::from_millis(DURATION_LOOP_MS));
-
-        if count_loop % LOOP_COUNT_INCREASE_SNAKE_SIZE == 0 {
-            add_segment = true
+        if scene.snake_ate_food(&snake) {
+            add_segment = true;
+            scene.add_fruit(&snake);
+            scene.draw_fruit()?;
         }
         else {
-            add_segment = false
+            add_segment = false;
         }
-        count_loop += 1;
+
+        thread::sleep(time::Duration::from_millis(DURATION_LOOP_MS));        
     }
 }

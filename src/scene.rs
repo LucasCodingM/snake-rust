@@ -8,12 +8,14 @@ use crossterm::{
 
 
 use crate::snake::Snake;
+use rand::{prelude::IndexedRandom};
 
 pub struct Scene<'a> {
     width: u16,
     height: u16,
     buffer: &'a mut Stdout,
-    border_width: u16
+    border_width: u16,
+    list_fruits: Vec<(u16,u16)>
 }
 
 impl<'a> Scene<'a> {
@@ -22,7 +24,8 @@ impl<'a> Scene<'a> {
             width,
             height,
             buffer,
-            border_width
+            border_width,
+            list_fruits: Vec::new()
         }
     }
 
@@ -51,20 +54,10 @@ impl<'a> Scene<'a> {
 
         for y in 0..self.height {
             for x in 0..self.width {
-                if (x == 0) || (x >= self.width - self.border_width) {
+                if (x == 0) || (x >= self.width - self.border_width) || (y == 0) || (y >= self.height - self.border_width){
                     self.buffer
                         .queue(cursor::MoveTo(x,y))?                        
-                        .queue(style::PrintStyledContent( "█".red()))?;
-                }
-                if y == 0 {
-                   self.buffer
-                        .queue(cursor::MoveTo(x,y))?                        
-                        .queue(style::PrintStyledContent( "▄".red()))?;
-                }
-                if y >= self.height - self.border_width {
-                    self.buffer
-                        .queue(cursor::MoveTo(x,y))?                        
-                        .queue(style::PrintStyledContent( "▀".red()))?;
+                        .queue(style::PrintStyledContent( "█".dark_red()))?;
                 }
             }   
         }
@@ -84,7 +77,7 @@ impl<'a> Scene<'a> {
             let (x,y) = *segment;
             self.buffer
                     .queue(cursor::MoveTo(x,y))?
-                    .queue(style::PrintStyledContent( "█".green()))?;
+                    .queue(style::PrintStyledContent( "░".green()))?;
         }
         self.buffer.flush()?;
         Ok(())
@@ -116,5 +109,59 @@ impl<'a> Scene<'a> {
             Some(_) => true,
             None => false,
         }
+    }
+
+    fn generate_random_tuple(&self, range_x: std::ops::Range<u16>,
+                                range_y: std::ops::Range<u16>,
+                                    excluded: &[(u16, u16)]) -> Option<(u16, u16)> {
+        let mut all_values = Vec::new();
+
+        for x in range_x.clone() {
+            for y in range_y.clone() {
+                let tuple = (x, y);
+                if !excluded.contains(&tuple) {
+                    all_values.push(tuple);
+                }
+            }
+        }
+
+            let mut rng = rand::rng();
+            all_values.choose(&mut rng).copied()
+    }
+
+
+    pub fn add_fruit(&mut self, snake: &Snake) {
+
+        if let Some(fruit) = self.generate_random_tuple(std::ops::Range { start: 1, end: self.width - 2 },
+            std::ops::Range { start: 1, end: self.height - 2 },&snake.body()) {
+                self.list_fruits.push(fruit);
+            }
+    }
+
+    pub fn draw_fruit(&mut self) -> io::Result<()>{
+        for (x_fruit, y_fruit) in self.list_fruits.iter() {
+            self.buffer
+                    .queue(cursor::MoveTo(*x_fruit,*y_fruit))?
+                    .queue(style::PrintStyledContent("●".yellow()))?;
+        }  
+        self.buffer.flush()?;
+        Ok(())
+    }
+
+    pub fn remove_fruit(&mut self, fruit_to_remove: &(u16,u16)) -> bool{
+        let _ = self.buffer.flush();
+        if let Some(index) = self.list_fruits.iter().position(|fruit| fruit == fruit_to_remove) {
+            self.list_fruits.remove(index);
+            return true;
+        }
+        false
+    }
+
+    pub fn snake_ate_food(&mut self, snake: &Snake) -> bool {
+
+        if let Some(head_pos) = snake.body().first() {
+            return self.remove_fruit(head_pos);
+        }
+        false
     }
 }
